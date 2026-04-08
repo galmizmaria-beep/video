@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Видеоредактор для Genially</title>
+    <!-- Этот скрипт снимает ограничения браузера для работы с видео -->
+    <script src="coi-serviceworker.js"></script>
+    <!-- Подключаем FFmpeg -->
+    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; background: #f0f2f5; color: #333; }
+        .card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        h1 { font-size: 24px; text-align: center; margin-bottom: 5px; }
+        p.subtitle { text-align: center; color: #666; margin-bottom: 20px; font-size: 14px; }
+        .section { margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid #eee; }
+        .section:last-child { border-bottom: none; }
+        label { font-size: 14px; font-weight: bold; display: block; margin-bottom: 8px; }
+        input[type="file"], input[type="number"] { width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
+        .row { display: flex; gap: 10px; }
+        button { width: 100%; padding: 14px; background: #0066ff; color: white; border: none; border-radius: 6px; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.3s; }
+        button:hover { background: #0052cc; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        #status { text-align: center; font-weight: bold; margin-top: 15px; min-height: 20px; color: #d9534f; }
+        #result-card { display: none; background: #e8f5e9; margin-top: 20px; }
+        textarea { width: 100%; height: 100px; padding: 10px; border-radius: 6px; border: 1px solid #ccc; resize: none; font-family: monospace; box-sizing: border-box; }
+    </style>
+</head>
+<body>
+
+    <div class="card">
+        <h1>🎬 Genially Video Editor</h1>
+        <p class="subtitle">Обрежьте видео, и оно само превратится в код</p>
+        
+        <div class="section">
+            <label>1. Выберите видео (mp4, mov)</label>
+            <input type="file" id="video-upload" accept="video/*">
+        </div>
+        
+        <div class="section">
+            <label>2. Обрезка (необязательно)</label>
+            <div class="row">
+                <input type="number" id="start-time" placeholder="С какой секунды (напр. 5)">
+                <input type="number" id="end-time" placeholder="По какую секунду (напр. 15)">
+            </div>
+        </div>
+
+        <div class="section">
+            <label>3. Замылить логотип (необязательно)</label>
+            <div class="row">
+                <input type="number" id="wm-x" placeholder="Слева (X)">
+                <input type="number" id="wm-y" placeholder="Сверху (Y)">
+                <input type="number" id="wm-w" placeholder="Ширина">
+                <input type="number" id="wm-h" placeholder="Высота">
+            </div>
+        </div>
+
+        <button id="process-btn" onclick="startProcess()">🚀 Обработать и получить код</button>
+        <div id="status"></div>
+    </div>
+
+    <div class="card" id="result-card">
+        <label style="color: #2e7d32;">✅ Готово! Код для Genially:</label>
+        <p style="font-size: 12px; margin-top: 0;">Скопируйте текст ниже и вставьте в Genially (Вставка -> Другое).</p>
+        <textarea id="genially-code" readonly onclick="this.select()"></textarea>
+    </div>
+
+    <script>
+        const { createFFmpeg, fetchFile } = FFmpeg;
+        const ffmpeg = createFFmpeg({ log: false });
+
+        async function startProcess() {
+            const fileInput = document.getElementById('video-upload');
+            if (!fileInput.files[0]) {
+                alert("Сначала выберите видео!");
+                return;
+            }
+
+            const btn = document.getElementById('process-btn');
+            const status = document.getElementById('status');
+            const resultCard = document.getElementById('result-card');
+            
+            btn.disabled = true;
+            resultCard.style.display = 'none';
+
+            const file = fileInput.files[0];
+            const start = document.getElementById('start-time').value;
+            const end = document.getElementById('end-time').value;
+            const x = document.getElementById('wm-x').value;
+            const y = document.getElementById('wm-y').value;
+            const w = document.getElementById('wm-w').value;
+            const h = document.getElementById('wm-h').value;
+
+            try {
+                status.innerText = "⏳ Загружаем ядро редактора...";
+                status.style.color = "#f0ad4e";
+                if (!ffmpeg.isLoaded()) await ffmpeg.load();
+
+                status.innerText = "⚙️ Обработка видео (зависит от мощности вашего ПК)...";
+                ffmpeg.FS('writeFile', 'input.mp4', await fetchFile(file));
+
+                let command = ['-i', 'input.mp4'];
+                if (start) command.push('-ss', start);
+                if (end) command.push('-to', end);
+                if (x && y && w && h) command.push('-vf', `delogo=x=${x}:y=${y}:w=${w}:h=${h}`);
+                
+                // Быстрое сжатие под веб
+                command.push('-vcodec', 'libx264', '-crf', '28', '-preset', 'ultrafast', 'output.mp4');
+
+                await ffmpeg.run(...command);
+
+                const data = ffmpeg.FS('readFile', 'output.mp4');
+                const editedVideoBlob = new Blob([data.buffer], { type: 'video/mp4' });
+
+                status.innerText = "☁️ Видео готово! Отправляем на сервер...";
+                
+                // Авто-загрузка на бесплатный хостинг Catbox
+                const formData = new FormData();
+                formData.append('reqtype', 'fileupload');
+                formData.append('fileToUpload', editedVideoBlob, 'video.mp4');
+
+                const response = await fetch('https://catbox.moe/user/api.php', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) throw new Error("Сервер загрузки недоступен");
+                
+                const videoUrl = await response.text(); 
+
+                status.innerText = "";
+                
+                // Генерация кода для Genially
+                const embedCode = `<video width="100%" height="auto" controls controlsList="nodownload">
+  <source src="${videoUrl}" type="video/mp4">
+</video>`;
+                
+                document.getElementById('genially-code').value = embedCode;
+                resultCard.style.display = 'block';
+
+            } catch (error) {
+                console.error(error);
+                status.innerText = "❌ Ошибка. Возможно, видео слишком большое.";
+                status.style.color = "#d9534f";
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "🚀 Обработать и получить код";
+            }
+        }
+    </script>
+</body>
+</html>
